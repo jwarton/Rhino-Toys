@@ -1,0 +1,811 @@
+Option Explicit
+'Script written by James Warton
+'Script copyrighted by factor-e.net
+'Script version Tuesday, 10 December 2013 12:09:48
+
+Call Main()
+
+Sub Main()
+
+	Dim arrLines, line, strLine
+	Dim cntLines
+	Dim arrPoints, point, strPoint
+	Dim cntPoints
+	Dim startPt,endPt, midPt, nodePos
+	Dim strLine02, startPt02, endPt02 
+	Dim case01, case02
+	Dim cntBranches, arrBranches(), strBranch
+	Dim arrNodes()
+	Dim lattice
+	Dim StressCrvs
+
+	Dim i,j,k
+	Dim arrPts(),pt
+	
+	'pick lines
+	arrLines = Rhino.GetObjects("select lines", 4)
+	'pick points
+	arrPoints = Rhino.GetObjects("select points", 1)
+	'pick stress Crvs
+	StressCrvs = Rhino.GetObjects("select Stress Curves", 4)
+	
+	'''count lines
+	cntLines = 0
+	For Each line In arrLines
+		cntLines = cntLines + 1
+	Next
+	'''count points
+	cntPoints = 0
+	For Each point In arrPoints
+		cntPoints = cntPoints + 1
+	Next
+	''resize arrNodes to number of points
+	ReDim arrNodes(cntPoints)
+	''loop through points, find all connected lines, add branch from node to midpoint to array of branching nodes
+	''arrNodes contains array of strings for each line
+	''coordinates from these line are used to construct node geometry
+	For i = 0 To (cntPoints - 1)
+		cntBranches = 0
+		ReDim arrBranches(10)
+		strPoint = arrPoints(i)
+		nodePos = Rhino.PointCoordinates(strPoint)
+		For j = 0 To (cntLines - 1)
+			strLine = arrLines(j)
+			startPt = Rhino.CurveStartPoint(strLine)
+			endPt = Rhino.CurveEndPoint(strLine)
+			case01 = Rhino.PointCompare(nodePos, startPt, 001)
+			case02 = Rhino.PointCompare(nodePos, endPt, 001)
+			If case01 = True Or case02 = True Then
+				midPt = Rhino.CurveMidPoint(strLine)
+				strBranch = Rhino.AddLine(nodePos, midPt)
+				arrBranches(cntBranches) = strBranch
+				cntBranches = cntBranches + 1
+			End If
+		Next
+		ReDim Preserve arrBranches(cntBranches)
+		arrNodes(i) = arrBranches
+	Next
+	For i = 0 To (cntPoints - 1)
+		strPoint = arrPoints(i)
+		nodePos = Rhino.PointCoordinates(strPoint)
+		lattice = latticeToNodes(nodePos, arrNodes(i), StressCrvs)
+	Next
+End Sub
+'''''	FUNCTION DEFINES BASIC PARMETERS FOR NODE CONSTRUCTION
+Function latticeToNodes(nodePos, arrBranches, StressCrvs)
+	Dim divisions
+	Dim i,j
+	Dim branchD, branchW
+	Dim node
+	Dim posStart, posEnd
+	Dim currentBranch
+	
+	''base parameters for branching node
+	divisions = 3
+	branchD = 20
+	branchW = 10
+	
+	node = nodeFunction(nodePos, arrBranches, divisions, branchD, branchW, StressCrvs)
+End Function
+
+'''''	FUNCTION RETURNS ARRAY OF LINES OR MESH FROM CURVES
+Function nodeFunction(nodePos, vectors, divisions, branchD, branchW, StressCrvs)
+	Dim width,height,vector,degree,length,nodeSz
+	Dim branchCt
+	Dim i,j,k, index
+	Dim x,y,z
+	Dim endPt, xE, yE, zE
+	Dim startPt, xS, yS, zS
+	Dim branchCrvs, nodePts01, nodeCrv, cellCrvs, crvCt
+	Dim vector01, vector02, nodePts02, pt0, pt1, dist01, dist02
+	Dim vectorA, vectorB, startPtB, endPtB
+	Dim arrPtPairs(), arrPtPairs02(), miterPtA, miterPtB
+	Dim vectorPairs(),vectorPairs02(), vectorPair
+	Dim case01, case02, case03, case04, case05
+	Dim test, arrLength
+	Dim arrPoints, arrPtsNew, ptA, ptB, line, ptN
+	
+	index = 0
+	branchCt = Ubound(vectors)
+	''''''''''''''''''''	SET INITIAL NODE SIZE TO LENGTH  ''REDUCED TO 1/3 AFTER FIRST ITERATION
+	nodeSz = Rhino.CurveLength(vectors(i))
+	''''''''''''''''''''	DEFINES CENTER POINT FOR BRANCHING COMPONENT CONSTRUCTION	
+	x = nodePos(0)
+	y = nodePos(1)
+	z = nodePos(2)
+	
+	ReDim arrPtPairs(500) ''this array is truncated after points pairs are inserted
+	ReDim vectorPairs(500)''this array is truncated after points pairs are inserted
+	ReDim branchCrvs(branchCt-1)''array to store array of branch curves
+	
+	For i = 0 To (branchCt - 1)
+		length = Rhino.CurveLength(vectors(i))
+		If nodeSz > (length * 0.5) Then
+			nodeSz = length * 0.5
+		End If
+	Next
+	'''''''''''''''''''''''''''Define Points For Branch Length and Direction
+	For i = 0 To (branchCt - 1)
+		''''''''''''''''	CONVERT LINES TO VECTORS AND EXTRACT POINT COORDINATES
+		startPt = Rhino.CurveStartPoint(vectors(i))
+		endPt = Rhino.CurveEndPoint(vectors(i))
+		vector = Rhino.VectorCreate(endPt, startPt)
+		length = Rhino.CurveLength(vectors(i))
+		''''''''''''''''	DEFINE START POINT FOR BRANCH PROFILES
+		xS = x + nodeSz
+		yS = y + 0
+		zS = z + 0
+		''''''''''''''''	DEFINE END POINT FOR BRANCH PROFILES	
+		xE = x + length
+		yE = y + 0
+		zE = z + 0
+		startPt = Array(xS, yS, zS)
+		endPt = Array(xE, yE, zE)
+		'''	CALL FUNCTION TO BUILD BRANCH CURVES  ''THIS FUNCTION CALLS PROFILE FUNCTION BASED ON DIVISIONS
+		branchCrvs(i) = branchFunction(nodePos, startPt, endPt, vector, divisions, branchD, branchW, branchCt, StressCrvs)
+	Next
+	index = 0
+	For i = 0 To (branchCt - 1)
+		''''''''''''''''	CONVERT LINES TO VECTORS AND EXTRACT POINT COORDINATES
+		startPt = Rhino.CurveStartPoint(vectors(i))
+		endPt = Rhino.CurveEndPoint(vectors(i))
+		vectorA = Rhino.VectorCreate(endPt, startPt)
+		length = Rhino.CurveLength(vectors(i))
+		xS = x + nodeSz
+		yS = y + 0
+		zS = z + 0
+		startPt = Array(xS, yS, zS)
+		''''''''''''''''	LOOP THROUGH BRANCHES TO DEFINE MITER POINTS AND NODE CONNECTION POINTS
+		For j = 0 To (branchCt - 1) 
+			If (i <> j)Then
+				vector01 = vectors(i)
+				vector02 = vectors(j)
+				'''''''''''''''''''''''''''''''''''''''''''''''''''Call Function to Build Node Wireframe
+				nodePts01 = nodeHubFunction(vector01, vector02, nodeSz, branchD)
+				nodePts02 = profileFunction(nodePos, startPt, vectorA, branchD, branchW, StressCrvs)
+				''''''		LOOP TO CONNECT LINES BETWEEN MITER POINTS AND BRANCH PTS
+				'For k = 0 To 1
+				nodePts02 = Rhino.SortPointsByDistance(nodePts02, nodePts01(0))
+				pt0 = nodePts02(0)
+				pt1 = nodePts02(1)
+				dist01 = Rhino.Distance(nodePts01(0), nodePts02(0))
+				dist02 = Rhino.Distance(nodePts01(1), nodePts02(0))
+				If dist01 < dist02 Then
+					nodeCrv = Rhino.AddLine(nodePts01(0), pt0)
+					'nodeCrv = Rhino.AddLine(nodePts01(1), nodePts02(1))
+				Else
+					nodeCrv = Rhino.AddLine(nodePts01(1), pt1)
+					'nodeCrv = Rhino.AddLine(nodePts01(0), nodePts02(1))
+				End If
+				nodePts02 = Rhino.SortPointsByDistance(nodePts02, nodePts01(1))
+				
+				'Next
+				vectorPairs(index) = array(vector01, vector02)	'' CONSTRUCT ARRAY OF VECTOR PAIRS			'' CONTAINS DUPLICATE PAIRS
+				arrPtPairs(index) = nodePts01					'' CONSTRUCT ARRAY OF ALL MITER PAIR POINTS '' CONTAINS DUPLICATE PAIRS
+				index = index + 1
+			End If
+		Next
+	Next
+	ReDim Preserve vectorPairs(index)
+	ReDim Preserve arrPtPairs(index)
+	ReDim vectorPairs02(index)  ''CHECK THAT THESE ARE REQUIRED
+	ReDim arrPtPairs02(index)	''CHECK THAT THESE ARE REQUIRED
+	arrLength = Ubound(arrPtPairs)
+	index = 0
+	''''''''''''''''	LOOP THROUGH MITER POINTS AND CONSTRUCT ARRAY WITHOUT DUPLICATES
+	For i = 0 To arrLength - 1
+		If i = 0 Then
+			vectorPairs02(i) = vectorPairs(i)	''new array contains first pair
+			arrPtPairs02(i) = arrPtPairs(i) 	''new array contains first pair
+			line = Rhino.AddLine(arrPtPairs(i)(0), arrPtPairs(i)(1))
+			index = index + 1
+		Else
+			case05 = True
+			For j = 0 To index - 1
+				miterPtA = arrPtPairs(i)(0)
+				miterPtB = arrPtPairs02(j)(0)
+				case01 = Rhino.PointCompare(miterPtA, miterPtB)
+				
+				miterPtB = arrPtPairs02(j)(1)
+				case02 = Rhino.PointCompare(miterPtA, miterPtB)
+				
+				miterPtA = arrPtPairs(i)(1)
+				miterPtB = arrPtPairs02(j)(0)
+				case03 = Rhino.PointCompare(miterPtA, miterPtB)
+				
+				miterPtB = arrPtPairs02(j)(1)
+				case04 = Rhino.PointCompare(miterPtA, miterPtB)
+				
+				If case01 = True Or case02 = True Or case03 = True Or case04 = True Or case05 = False Then
+					case05 = False
+				Else
+					case05 = True
+				End If
+			Next
+			If case05 = True Then
+				vectorPairs02(index) = vectorPairs(i) ''array of vector pairs corresponding to respective miter points
+				arrPtPairs02(index) = arrPtPairs(i)
+				line = Rhino.AddLine(arrPtPairs(i)(0), arrPtPairs(i)(1))
+				index = index + 1
+			End If
+		End If
+	Next
+	
+	ReDim Preserve vectorPairs02(index)
+	ReDim Preserve arrPtPairs02(index)
+	
+	arrPoints = ptRambler(arrPtPairs02) 
+	ptA = arrPtPairs02(0)(0)
+	ptB = arrPtPairs02(0)(1)
+	vectorPair = vectorPairs02(0)
+	arrPtsNew = neighborFunct(ptA, ptB, arrPoints, arrPtPairs02, vectorPair, nodePos)
+	For i = 0 To (ubound(arrPoints) / 3) - 2
+		ptA = arrPtsNew(0)
+		ptN = ptNeighbor(arrPtsNew(0), arrPtPairs02)
+		ptB = ptN(0)
+		vectorPair = vectorPairs02(ptN(1))
+		arrPtsNew = neighborFunct(ptA, ptB, arrPtsNew, arrPtPairs02, vectorPair, nodePos)
+	Next
+	''DEFINE ARRAY LENGTH BASED ON CURVES IN ARRAY
+	''THIS ONLY CONTAINS BRANCH CURVES IN BETA VERSION OF SCRIPT
+	crvCt = ((Ubound(branchCrvs(0)) + 1) * branchCt) - 1
+	ReDim cellCrvs(crvCt)
+	'''''''''''''''''''''	FILL ARRAY WITH BRANCH CURVES 
+	index = 0
+	For i = 0 To (branchCt - 1)
+		For j = 0 To Ubound(branchCrvs(i))
+			cellCrvs(index) = branchCrvs(i)(j) 	
+			index = index + 1	
+		Next
+	Next
+	''PASS ARRAY OF CURVES AS STRINGS TO MESH FUNCTION
+	nodeFunction = cellCrvs ''wireToMesh(cellCrvs)
+End Function
+
+'''''	FUNCTION RETURNS 2 MITER POINTS NORMAL TO SHARED BRANCH PLANE
+Function nodeHubFunction(vector01, vector02, length, depth)
+	Dim pts(3) 
+	Dim case01
+	Dim startPt01, startPt02
+	Dim miterAngle, miterAxis, miterAxis01, miterAxis02, miterVector, miterLength
+	Dim miterPt, miterPt01, miterPt02, miterLine, miterDepth
+	Dim arrPts(2)'''this function returns array with two miter points
+	''''''''''''''''''''	DEFINE COORDINATES FOR SUPPLIED BRANCHING LINES
+	startPt01 = Rhino.CurveStartPoint(vector01)
+	startPt02 = Rhino.CurveStartPoint(vector02)
+	case01 = Rhino.PointCompare(startPt01, startPt02)
+	''''''''''''''''''''	CHECK TO THAT BOTH VECTORS SHARE SAME START POINT
+	If (case01 = True) Then
+		pts(0) = Rhino.CurveStartPoint(vector01)
+		pts(1) = Rhino.CurveEndPoint(vector01)
+		pts(2) = Rhino.CurveEndPoint(vector02)
+		''''''''''''''''	CREATE AND UNITIZE TWO BRANCHING VECTORS
+		vector01 = Rhino.VectorCreate(pts(1), pts(0))
+		vector01 = Rhino.VectorUnitize(vector01)
+		vector02 = Rhino.VectorCreate(pts(2), pts(0))
+		vector02 = Rhino.VectorUnitize(vector02)
+		''''''''''''''''	DEFINE VECTOR BETWEEN TWO BRANCHES
+		miterAxis = Rhino.VectorCrossProduct(vector01, vector02)
+		miterAxis = Rhino.VectorUnitize(miterAxis)
+		miterVector = Rhino.VectorAdd(vector01, vector02)
+		miterVector = Rhino.VectorUnitize(miterVector)
+		''''''''''''''''    CALCULATE ANGLE BETWEEN VECTORS
+		miterAngle = Rhino.VectorDotProduct(vector01, vector02)
+		miterAngle = Rhino.ACos(miterAngle)
+		miterAngle = Rhino.ToDegrees(miterAngle)
+		''''''''''''''''	SCALE VECTOR AND DEFINE POINT AT MITER LOCATION
+		miterLength = (length * .5) - (((length * .5)-(length * .2))*(miterAngle / 180))
+		miterVector = Rhino.VectorScale(miterVector, miterLength)
+		miterPt = Rhino.PointAdd(pts(0), miterVector)
+		''''''''''''''''	DEFINE POINTS ON EITHER SIDE OF MITER PLANE
+		If miterAngle > 160 Then
+			miterDepth = depth * .5
+		Else
+			miterDepth = (depth * .05) + (((depth * .5)-(depth * .05))*(miterAngle / 160))
+		End If
+		miterAxis01 = Rhino.VectorScale(miterAxis, miterDepth)
+		miterPt01 = Rhino.PointAdd(miterPt, miterAxis01)
+		miterAxis02 = Rhino.VectorScale(miterAxis, -miterDepth)
+		miterPt02 = Rhino.PointAdd(miterPt, miterAxis02)
+		''''''''''''''''	INSERT POINTS INTO ARRAY
+		arrPts(0) = miterPt01
+		arrPts(1) = miterPt02
+		''''''''''''''''	CONSTRUCT MITER LINE
+		''miterLine = Rhino.AddLine(miterPt01, miterPt02)
+		''''''''''''''''''''	FUNCTION RETURNS 2 MITER POINTS NORMAL TO SHARED BRANCH PLANE
+		nodeHubFunction = arrPts	
+	Else
+		Rhino.Print("Vectors Do Not Share Common Start Point")
+	End If 	
+End Function
+
+'''''	FUNCTION RETURNS ARRAY OF ALL BRANCH LINES AND CALLS POFILE FUNCTION
+Function branchFunction (nodePos, ptS, ptE, vector, divisions, branchD, branchW, branchCt, StressCrvs)
+	''coordinates for points that define medial axis of branch 
+	Dim x,y,z,pt
+	''points and coordinates at each division along medial axis
+	Dim x1,y1,z1,pt1
+	Dim x2,y2,z2,pt2
+	Dim x3,y3,z3,pt3
+	Dim x4,y4,z4,pt4
+	Dim line
+	Dim arrLines(),index
+	Dim arrPts(),arrXform
+	Dim width, depth, length, scaleVec, tempVec
+	Dim i,j
+
+	''arrLines Array Length:  
+	''lines in each segment = 4
+	''lines in each division = 4
+	''array length - 1 to compensate for 0 start position
+	ReDim arrLines(((divisions+1) * 4) + ((divisions+1) * 4)-1)
+	''index value for position within array containing lines
+	index = 0 ''increment index for every line drawn in function
+	ReDim arrPts(divisions)
+	
+	length = Rhino.Distance(ptS, ptE)	
+	width = branchW
+	depth = branchD
+	
+	''points define profile positions
+	x = ptS(0)
+	y = ptS(1)
+	z = ptS(2)
+	
+	tempVec = Rhino.VectorCreate(ptE, ptS)
+	For i = 0 To divisions	
+		tempVec = Rhino.VectorUnitize(tempVec)
+		scaleVec = Rhino.VectorScale(tempVec, (length / divisions) * i)
+		pt = Rhino.PointAdd(ptS, scaleVec) '''point on vector
+		arrPts(i) = profileFunction(nodePos, pt, vector, depth, width, StressCrvs)
+		''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''DEFINES DIVISION LINES FOR EACH CONNECTION  'C LINES'	
+		For j = 0 To 3
+			pt1 = arrPts(i)(j)
+			If j < 3 Then
+				pt2 = arrPts(i)(j + 1)
+			ElseIf j = 3 Then
+				pt2 = arrPts(i)(0)
+			End If
+			line = Rhino.AddLine(pt1, pt2)  ''construct lines from points
+			arrLines(index) = line  		''add lines to array of lines
+			index = index + 1
+		Next
+	Next
+	''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''DEFINES EDGE LINES FOR LENGTH LINES OF EACH DIVISION  'D LINES'
+	For i = 0 To divisions	
+		If i > 0 Then
+			For j = 0 To 3
+				pt1 = arrPts(i - 1)(j)
+				pt2 = arrpts(i)(j)
+				line = Rhino.AddLine(pt1, pt2)  ''construct lines from points
+				arrLines(index) = line  		''add lines to array of lines
+				index = index + 1
+			Next
+		End If
+	Next	
+	ReDim Preserve arrLines(index-1)
+	branchFunction = arrLines  ''FUNCTION RETURNS ALL WIREFRAME LINES AS ARRAY OF STRINGS
+End Function
+
+'''''	FUNCTION RETURNS ARRAY OF POINTS DEFINIING A PROFILE
+Function profileFunction(nodePos, pt, vector, depth, width, StressCrvs)
+	Dim x,y,z
+	Dim x1,y1,z1
+	Dim x2,y2,z2
+	Dim x3,y3,z3
+	Dim x4,y4,z4
+	Dim pt1,pt2,pt3,pt4
+	Dim arrPts,arrXform, length
+	Dim dist, distMin, distMax, distFactor
+	Dim depthFactor, depthMin, depthMax
+	Dim v0,v1,v2
+	Dim plane01, plane02
+	Dim planePt1, planePt2, planePt3, planePts, rotPt, rotVec
+	Dim case01, case02, case03
+	Dim theta
+	Dim test
+	 
+	''distMax defines area of maximum curve influence in file units
+	distMax = 250
+	distMin = 0
+	depthMax = depth
+	depthMin = width
+	
+	dist = distToMin(pt, StressCrvs)
+
+	If dist < 1 Then 
+		dist = 1 
+	End If
+	If dist < distMax Then
+		distFactor = (1 - (dist / distMax - distMin))
+		''depth = depthMax - ((depthMax - depthMin) * distFactor)
+		''Rhino.Print("depth = " & depth)
+	Else
+		''depth = depthMin
+	End If
+
+	length = Rhino.Distance(pt, nodePos)
+	''points define profile positions
+	x = nodePos(0)
+	y = nodePos(1)
+	z = nodePos(2)
+		
+	''' points define rectangular profile
+	x1 = (x + (length))
+	y1 = (y + (width / 2))
+	z1 = (z - (depth / 2))
+		
+	x2 = (x + (length))
+	y2 = (y - (width / 2))
+	z2 = (z - (depth / 2))
+		
+	x3 = (x + (length))
+	y3 = (y - (width / 2))
+	z3 = (z + (depth / 2))
+		
+	x4 = (x + (length))
+	y4 = (y + (width / 2))
+	z4 = (z + (depth / 2))
+		
+	pt1 = array(x1, y1, z1)
+	pt2 = array(x2, y2, z2)
+	pt3 = array(x3, y3, z3)
+	pt4 = array(x4, y4, z4)
+	
+	arrPts = array(pt1, pt2, pt3, pt4)		
+	arrXform = Rhino.XformRotation(Array(1, 0, 0), vector, nodePos)
+	arrPts = Rhino.PointArrayTransform(arrPts, arrXform)
+	plane01 = Rhino.PlaneFromPoints(nodePos, array(x, y + 1, z), array(x, y, z + 1))''construct plane of profile 
+	plane01 = Rhino.PlaneTransform(plane01, arrXform)''use plane transfrom to align with vector as z-axis
+	
+	v0 = plane01(2)  ''profile y-axis
+	case01 = Rhino.IsVectorParallelTo(v0, array(0, 0, 1))		'''test if profile y-axis is parallel to world z
+	case02 = Rhino.IsVectorParallelTo(vector, array(0, 0, 1))	''' test if vector is parrallel to world z
+	If case01 = 0 And case02 = 0 Then
+		v1 = Array(vector(0), vector(1), 0) 	''xy projection of vector
+		v1 = Rhino.VectorUnitize(v1)
+		v2 = Array(v0(0), v0(1), 0)		''xy projection of v0
+		v2 = Rhino.VectorUnitize(v2)
+		
+		case03 = Rhino.IsVectorParallelTo(v2, v1)'''case02 test if projection of y-axis is parallel to branch vector
+		'''perform rotation about vector if both cases are false
+		If case03 = 0 Then 
+			'''construct plane from vector perpendicular to xy plane and find interstion point for theta
+			planePt1 = nodePos
+			planePt2 = Rhino.PointAdd(nodePos, vector)
+			planePt3 = Array(nodePos(0), nodePos(1), 0)
+			planePts = Array(planePt1, planePt2, planePt3)
+			plane02 = Rhino.PlaneFitFromPoints(planePts)
+			'''plane intersction works, but rotation should be derived from eular? rotations?
+			rotPt = Rhino.PlaneArcIntersection(plane02, plane01, 1, -359)
+			rotVec = Rhino.VectorCreate(rotPt(1), nodePos)
+			rotVec = Rhino.VectorUnitize(rotVec)		
+			'''calculate theta 
+			v0 = Rhino.VectorUnitize(v0)
+			theta = Rhino.VectorDotProduct(v0, rotVec)
+			theta = Rhino.ACos(theta)
+			theta = Rhino.ToDegrees(theta)
+			If theta < 90 Then
+				theta = 180 - theta
+			End If
+			arrXform = Rhino.XformRotation(theta, vector, nodePos)
+			arrPts = Rhino.PointArrayTransform(arrPts, arrXform)
+		End If
+	End If
+	profileFunction = arrPts
+End Function
+
+Function ptRambler(arrPtPairs)
+	Dim ptA, ptB, ptC
+	Dim arrPairs, arrPoints, arrLength
+	Dim i,j,index
+	Dim line
+	Dim arrNodePts(3)
+	Dim case01, case02, case03, case04
+	Dim idPair, idPt
+	Dim arrPtsNew, arrPtsNew02,lnNew
+	Dim rambler(2),test
+	
+	''''''construct one dimensional array from point pairs
+	index = 0
+	arrLength = ubound(arrPtPairs)
+	ReDim arrPoints(arrLength*2)
+	For i = 0 To (arrLength) - 1
+		arrPoints(index) = arrPtPairs(i)(0)
+		index = index + 1
+		arrPoints(index) = arrPtPairs(i)(1)
+		index = index + 1
+	Next
+	
+	ptRambler = arrPoints
+End Function
+
+'''''	FUNCTION DOES NOT RETURN | CONSTRUCTS MESH FROM T-SPLINE |REQUIRES ARRAY OF LINES AS STRING ID
+Function wireToMesh(cellCrvs)
+
+	Dim cellSrf, cellMesh
+	Dim mpDensity, mpAngle, mpAspRatio, mpMinEdge, mpMaxEdge, mpMaxDist, mpMinQuads, mpRefine, mpJag, mpSim, mpPack
+	Dim meshParam,i
+
+	mpDensity = 0
+	mpAngle = 0
+	mpAspRatio = 0
+	mpMinEdge = 0
+	mpMaxEdge = 0
+	mpMaxDist = 0.001
+	mpMinQuads = 0
+	mpRefine = True
+	mpJag = False
+	mpSim = False
+	mpPack = True	
+	
+	meshParam = Array(mpDensity, mpAngle, mpAspRatio, mpMinEdge, mpMaxEdge, mpMaxDist, mpMinQuads, mpRefine, mpJag, mpSim, mpPack)
+	
+	Rhino.SelectObjects cellCrvs
+	cellSrf = Rhino.Command("_TsFromLines _Enter")	''_O _Enter
+	cellSrf = Rhino.firstObject
+	meshParam = Rhino.MeshParameters(4, meshParam)
+	cellMesh = Rhino.MeshObjects(cellSrf, -1, meshParam)
+	Rhino.UnselectAllObjects
+	Rhino.DeleteObject(cellSrf)
+	Rhino.DeleteObjects(cellCrvs)
+	wireToMesh = cellMesh	
+End Function
+
+'''''	FUNCTION RETURNS DISTANCE TO CURVE FROM SPECIFIED POINT
+Function distToMin(pt, crvs)
+	Dim i,dist,distMin
+	distmin = 10000000000000000000000000000
+	Dim param,ptOnCrv
+	
+	For i = 0 To Ubound(crvs)
+		'' project centro path
+		param = rhino.CurveClosestPoint(crvs(i), pt)
+		ptOnCrv = rhino.EvaluateCurve(crvs(i), param)
+		dist = rhino.Distance(pt, ptOnCrv)
+	
+		If dist < distMin Then
+			distMin = dist
+		End If
+	Next
+	distToMin = distMin
+End Function
+
+'''''	FUNCTION RETURNS ARRAY OF POINTS NOT USED AFTER CONSTRUCTION LINE BETWEEN NODE POINTS
+Function neighborFunct(ptA, ptB, points, arrPtPairs, vectorPair, nodePos)
+	Dim pt0, pt1, pt2
+	Dim line0, line1, line2
+	Dim ptC, ptD, dist
+	Dim case01, case02, case03, case04, case05
+	Dim distMin
+	Dim i, index
+	Dim arrPts01, arrPts02, arrLength, ptN
+	Dim test
+		
+	arrLength = Ubound(points)
+	If arrLength > 2 Then 
+		ReDim arrPts01(arrLength - 2)
+		distMin = 1000000000000
+		pt0 = ptA
+		Rhino.Print("index length for pt1_" & arrLength)
+		For i = 0 To arrLength - 1
+			ptC = points(i)
+			case01 = Rhino.PointCompare(ptA, ptC)	'' DO NOT CONNECT TO YOURSELF
+			case02 = Rhino.PointCompare(ptB, ptC)	'' DO NOT CONNECT TO YOUR NEIGHBOR
+			case03 = planeIntersect(pt0, ptC, nodePos, vectorPair)  ''DO NOT CONNECT ACROSS PLANE
+			If case01 = False And case02 = False And case03 = False Then
+				dist = Rhino.Distance(pt0, points(i))
+				If dist < distMin Then
+					pt1 = points(i)					'' ASSIGN FIRST NEAREST CONNECTION
+					distMin = dist
+				End If			
+			End If
+		Next
+		
+		ptN = ptNeighbor(pt1, arrPtPairs) 			''  FIND PT01'S NEIGHBOR
+		ptD = ptN(0)
+		
+		distMin = 1000000000000
+		index = 0
+		For i = 0 To arrLength - 1
+			ptC = points(i)
+			case01 = Rhino.PointCompare(ptC, ptA)	'' DO NOT CONNECT TO YOURSELF
+			case02 = Rhino.PointCompare(ptC, ptB)	'' DO NOT CONNECT TO YOUR NEIGHBOR
+			case03 = Rhino.PointCompare(ptC, pt1)	'' DO NOT CONNECT TO PT01 | YOUR PREVIOUS CONNECTION
+			case04 = Rhino.PointCompare(ptC, ptD)  	'' DO NOT CONNECT TO PT01'S NEIGHBOR
+			case05 = planeIntersect(pt0, ptC, nodePos, vectorPair)
+			If case01 = False And case02 = False And case03 = False And case04 = False And case05 = False Then
+				arrPts01(index) = points(i)			'' CREATE ARRAY FOR REMAINING CONNECTIONS TO SEARCH FROM
+				index = index + 1
+			End If
+		Next
+		
+		ReDim Preserve arrPts01(index)
+		Rhino.Print("index length for pt2_" & index)
+		For i = 0 To Ubound(arrPts01) - 1
+			ptC = arrPts01(i)
+			dist = Rhino.Distance(pt0, ptC)
+			If dist < distMin Then
+				pt2 = ptC							'' ASSIGN SECOND NEAREST CONNECTION
+				distMin = dist	
+			End If
+		Next
+		
+		If IsArray(pt2) Then
+			Rhino.Print("pt2 successfully selected")
+		Else
+			'Rhino.AddPoint(ptC)
+			Rhino.AddPoint(pt1)
+			Rhino.AddPoint(pt0)
+			For i = 0 To arrLength - 1
+				'Rhino.AddPoint(points(i))
+				case05 = planeIntersect(pt0, points(i), nodePos, vectorPair)
+				Rhino.Print(case05)
+				If case05 = False Then
+					Rhino.AddPoint(points(i))
+				End If					
+			Next
+		End If
+				
+		index = 0
+		ReDim arrPts02(arrLength - 3)
+		For i = 0 To arrLength - 1					''  CREATE ARRAY OF ALL REMAINING POINTS [initial list - 3]
+			ptC = points(i)
+			case01 = Rhino.PointCompare(ptC, pt0)
+			case02 = Rhino.PointCompare(ptC, pt1)
+			case03 = Rhino.PointCompare(ptC, pt2)
+			If case01 = False And case02 = False And case03 = False Then
+				arrPts02(index) = points(i)
+				index = index + 1
+			End If
+		Next
+		
+		ReDim Preserve arrPts02(index)
+		line0 = Rhino.AddLine(pt0, pt1)
+		line0 = Rhino.AddLine(pt1, pt2)
+		line0 = Rhino.AddLine(pt2, pt0)
+		
+		neighborFunct = arrPts02					''  FUNCTION RETURNS ARRAY OF REMAINING POINTS
+	End If		
+End Function
+
+'''''	FUNCTION RETURNS POINT FROM ARRAY OF POINT PAIRS
+Function ptNeighbor(pt, arrPtPairs)
+	Dim pt0
+	Dim arrLength
+	Dim case01,case02
+	Dim i, index
+	
+	arrLength = Ubound(arrPtPairs)
+	
+	For i = 0 To arrLength - 1
+		case01 = Rhino.PointCompare(pt, arrPtPairs(i)(0))
+		case02 = Rhino.PointCompare(pt, arrPtPairs(i)(1))
+		If case01 = True Then
+			pt0 = arrPtPairs(i)(1)
+			index = i
+		End If
+		If case02 = True Then
+			pt0 = arrPtPairs(i)(0)
+			index = i
+		End If
+	Next
+	
+	If isArray(pt0) Then
+	Else
+		Rhino.Print("point failed to find partner")
+	End If
+	
+	ptNeighbor = array(pt0, index)
+End Function
+'''''	FUNCTION RETURNS TRUE IF INTERSECTION OCCURS ELSE RETURNS FALSE	
+Function planeIntersect(ptA, ptB, nodePos, vectorPair)
+	''ptA Must be active point and ptB is test Point
+	''THESE ARE NOT INTERCHANGEABLE
+	Dim vector01, vector02
+	Dim vPt01,vPt02, arrPoints
+	Dim arrLine, ptInt
+	Dim arrPlane
+	Dim case01, test
+	Dim vectB, lenVectB, vectInt, lenVectInt
+	Dim dist01, dist02, dist03
+	
+	vector01 = vectorPair(0)
+	vector02 = vectorPair(1)
+	
+	vPt01 = Rhino.PointAdd(nodePos, vector01)	'' FIRST POINT ON PLANE
+	vPt02 = Rhino.PointAdd(nodePos, vector02)	'' SECOND POINT ON PLANE
+	arrPoints = array(nodePos, vPt01, vPt02)	'' ARRAY OF POINT ON PLANE
+	arrLine = array(ptA, ptB)					'' LINE FROM ptA to ptB
+	arrPlane = Rhino.PlaneFitFromPoints(arrPoints)	'' PLANE DEFINED BY VECTOR01 AND VECTOR02
+	ptInt = Rhino.LinePlaneIntersection(arrLine, arrPlane)
+	If IsArray(ptInt) Then 
+		case01 = True
+		If case01 = True Then		
+			dist01 = Rhino.Distance(ptA, ptB)
+			dist02 = Rhino.Distance(ptInt, ptB)	
+			dist03 = Rhino.Distance(ptInt, ptA)
+			'''IF DIST02 IS GREATER THAN DIST01, INTERSECTION IS OUTSIDE OF LINE
+			'''THIS POINT STAYS IN SELECTION GROUP
+			If dist01 < dist02 + dist03 - .0001 Then
+				case01 = False
+			End If
+		End If
+	Else
+		case01 = False
+	End If
+	'''''''''''''''		FUNCTION RETURNS TRUE IF INTERSECTION OCCURS ELSE RETURNS FALSE	
+	planeIntersect = case01
+End Function
+
+Function rotateMem(strCrvs, Centers, Radius, ArrPtsBase, ArrPts, StrutCt, ptsCt, y)
+	
+	Dim i,j
+	Dim x,z,centX,centZ
+	Dim Pts,Crv,Pt
+	Dim rot,roAmp,roMin,roMax
+	Dim dist,distMax,distMin	
+	Dim test
+
+	roMin = 0
+	roMax = 360
+	
+	distMin = 0
+	distMax = 10000
+
+	For i = 0 To StrutCt
+		For j = 0 To ptsCt
+			'''''define strut rotation center
+			Centers(i)(1) = y
+			
+			centX = Centers(i)(0)
+			centZ = Centers(i)(2)
+			'''''define x' and z' of each point defining the strut section
+			x = ArrPts(i)(j)(0)
+			z = ArrPts(i)(j)(2)
+			
+			Pt = Centers(i)
+			
+			dist = distToMin(Pt, strCrvs)
+			If dist < 1 Then 
+				dist = 1 
+				dist = (100 - ((dist * 100) / distMax)) * .01''((dist*100)/distMax)*.01''
+			End If
+
+			If dist > distMax Then 
+				roAmp = 0
+			Else				
+				dist = (100 - ((dist * 100) / distMax)) * .01''((dist*100)/distMax)*.01''
+				roAmp = ((roMax - roMin) * dist) + roMin
+			End If
+			''Call Rhino.Print(roAmp)
+			rot = Rhino.toRadians(1.5 * i + roAmp)
+			''rot = Rhino.toRadians(2*i)
+			''Call Rhino.Print(rot)
+
+			
+			ArrPts(i)(j)(0) = ((x - centX) * cos(rot) - (z - centZ) * sin(rot)) + centX
+			ArrPts(i)(j)(1) = y
+			ArrPts(i)(j)(2) = ((x - centX) * sin(rot) + (z - centZ) * cos(rot)) + centZ
+			''Crv = rhino.AddPoint(arrPts(i)(j))
+		Next
+	Crv = Rhino.AddCurve(ArrPts(i), 1)
+	Next
+	Pts = resetPts(StrutCt, ptsCt, ArrPts, ArrPtsBase)
+	
+End Function
+Function resetPts(StrutCt, ptsCt, ArrPts, ArrPtsBase)
+	
+	Dim i,j
+	
+	For i = 0 To StrutCt
+		For j = 0 To ptsCt
+
+			ArrPts(i)(j)(0) = ArrPtsBase(i)(j)(0)
+			ArrPts(i)(j)(1) = ArrPtsBase(i)(j)(1)
+			ArrPts(i)(j)(2) = ArrPtsBase(i)(j)(2)
+
+		Next
+	Next
+	
+End Function

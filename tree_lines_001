@@ -1,0 +1,43 @@
+Option Explicit
+'Script written by James Warton
+'Script copyrighted by James Warton
+'Script version Friday, 03 January 2014 17:50:59
+
+Call Main()
+Sub Main()
+	
+	Dim i
+	Dim ptS, ptE, vector01
+	Dim line, tree
+	Dim count
+	
+	count = 0
+	ptS = array(0, 0, 0)
+	ptE = array(0, 0, 500)
+	vector01 = ptE
+	
+	line = Rhino.AddLine(ptS, ptE)
+	tree = recursiveLine(ptE, vector01, count)
+End Sub
+
+Function recursiveLine(ptS, vector01, count)
+	Dim i
+	Dim ptE, vector02
+	Dim line, branch, branchCnt, direction
+	Dim maxGen
+	
+	maxGen = 3
+	
+	If count < maxGen Then
+		branchCnt = 3
+		direction = 360 / branchCnt
+		For i = 1 To branchCnt
+			vector02 = Rhino.VectorAdd(vector01, array(rnd * 250 * 3, 0, 0))
+			vector02 = Rhino.VectorRotate(vector02, direction * i, vector01)
+			ptE = Rhino.PointAdd(ptS, vector02)
+			line = Rhino.AddLine(ptS, ptE)
+			branch = recursiveLine(ptE, vector02, count + 1)
+		Next
+		ptE = Rhino.AddPoint(ptS)
+	End If
+End Function

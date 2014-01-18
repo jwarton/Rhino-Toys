@@ -1,0 +1,45 @@
+Option Explicit
+
+Call Main()
+Sub Main()
+
+	Dim i,j
+	
+	Dim strSrf
+	Dim uDomain, vDomain
+	Dim Umax, Vmax	
+	Dim Ustep,Vstep
+	Dim Pt, u, v, x
+	umax = 20
+	vmax = 40
+		
+	'pick surface
+	strSrf = Rhino.GetObject("select surface", 8)
+	
+	'surface domain
+	uDomain = Rhino.SurfaceDomain(strSrf, 0)
+	vDomain = Rhino.SurfaceDomain(strSrf, 1)
+	
+	''evaluate step
+	Ustep = (Udomain(1) - Udomain(0)) / Umax
+	Vstep = (Vdomain(1) - vDomain(0)) / Vmax
+	'--------------------------------------------------------------------------------
+	ReDim matrix(Umax,Vmax)
+	
+	For i = 0 To Umax
+		For j = 0 To Vmax
+		
+			u = Udomain(0) + Ustep * i 
+			v = Vdomain(0) + Vstep * j 
+			
+			x = rnd(1)			
+			If x > .5 Then
+				''translates U,V to global coordinate
+				matrix(i, j) = Rhino.evaluateSurface(strSrf, array(u, v))
+				Rhino.AddPoint(matrix(i, j))				
+			End If
+			
+		Next
+	Next
+
+End Sub

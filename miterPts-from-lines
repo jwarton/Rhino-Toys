@@ -1,0 +1,78 @@
+Option Explicit
+
+Call Main()
+Sub Main()
+	Dim arrlines
+	Dim centroid,pt
+	Dim vector01
+	Dim vector02
+	Dim miter, depth
+	Dim i
+	
+	depth = 25
+	
+	'pick lines
+	arrLines = Rhino.GetObjects("select lines", 4)
+	'pick points
+	centroid = Rhino.GetObject("select point", 1)
+	pt = Rhino.PointCoordinates(centroid)
+	
+	vector01 = arrLines(0)
+	vector02 = arrLines(1)
+	miter = miterPoints(vector01, vector02, pt, depth)	
+	
+	For i = 0 To Ubound(miter) - 1
+		Rhino.AddPoint(miter(i))
+	Next 
+	
+End Sub
+
+Function miterPoints(vector01, vector02, centroid, depth)
+	
+	Dim Plane
+	Dim pts(3) 
+	Dim case01, case02, testLine
+	Dim startPt01,endPt01
+	Dim startPt02,endPt02
+	Dim arrXform01,arrXform02
+	Dim miterAngle, miterAxis, miterAxis01, miterAxis02, miterVector, miterPt, miterPt01, miterPt02, miterLine
+	Dim arrPts(2)'''returns array of points for this function
+
+	startPt01 = Rhino.CurveStartPoint(vector01)
+	startPt02 = Rhino.CurveStartPoint(vector02)
+	case01 = Rhino.PointCompare(startPt01, startPt02)
+	
+	If (case01 = True) Then
+		pts(0) = Rhino.CurveStartPoint(vector01)
+		pts(1) = Rhino.CurveEndPoint(vector01)
+		pts(2) = Rhino.CurveEndPoint(vector02)
+		pts(3) = centroid
+		
+		vector01 = Rhino.VectorCreate(pts(1), pts(0))
+		vector02 = Rhino.VectorCreate(pts(2), pts(0))
+		
+		miterAngle = Rhino.VectorDotProduct(vector01, vector02) 
+		miterAngle = Rhino.toDegrees(miterAngle)
+		
+		miterAxis = Rhino.VectorCrossProduct(vector01, vector02)
+		miterAxis = Rhino.VectorUnitize(miterAxis)
+		miterVector = Rhino.VectorAdd(vector01, vector02)
+		miterVector = Rhino.VectorScale(miterVector, .25)
+		
+		miterPt = Rhino.PointAdd(pts(0), miterVector)
+
+		miterAxis01 = Rhino.VectorScale(miterAxis, depth)
+		miterPt01 = Rhino.PointAdd(miterPt, miterAxis01)
+		miterAxis02 = Rhino.VectorScale(miterAxis, -depth)
+		miterPt02 = Rhino.PointAdd(miterPt, miterAxis02)
+		
+		arrPts(0) = miterPt01
+		arrPts(1) = miterPt02
+
+		miterPoints = arrPts	
+
+	Else
+		Rhino.Print("Vectors Do Not Share Common Start Point")
+	End If 
+	
+End Function

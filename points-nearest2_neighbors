@@ -1,0 +1,80 @@
+Option Explicit
+Call Main()
+Sub Main()
+	Dim points
+	Dim neighbors
+	points = Rhino.GetObjects("select points", 1)
+	neighbors = neighborFunction(points)
+End Sub
+
+Function neighborFunction(points)
+	Dim pt0, pt1, pt2
+	Dim line0, line1, line2
+	Dim dist
+	Dim case01, case02, case03
+	Dim ptA, ptB
+	Dim distMin
+	Dim i, index
+	Dim arrPts01, arrPts02, arrLength
+	
+	arrLength = Ubound(points)
+	If arrLength >= 3 Then 
+		ReDim arrPts01(arrLength - 2)
+		distMin = 1000000000
+		pt0 = points(0)
+		ptA = Rhino.PointCoordinates(pt0)
+		pt0 = ptA
+		
+		For i = 0 To arrLength
+			ptB = Rhino.PointCoordinates(points(i))
+			case01 = Rhino.PointCompare(ptA, ptB)
+			If case01 = False Then
+				dist = Rhino.Distance(ptA, ptB)
+				If dist < distMin Then
+					pt1 = ptB
+					distMin = dist
+				End If			
+			End If
+		Next
+		distMin = 1000000000
+		index = 0
+		For i = 0 To arrLength
+			ptB = Rhino.PointCoordinates(points(i))
+			case02 = Rhino.PointCompare(ptB, pt0)
+			case03 = Rhino.PointCompare(ptB, pt1)
+			If case02 = False And case03 = False Then
+				arrPts01(index) = points(i)
+				index = index + 1
+			End If
+		Next
+		
+		For i = 0 To Ubound(arrPts01)
+			ptB = Rhino.PointCoordinates(arrPts01(i))
+			dist = Rhino.Distance(ptA, ptB)
+			If dist < distMin Then
+				pt2 = ptB
+				distMin = dist			
+			End If
+		Next
+		ReDim arrPts02(arrLength - 3)
+		index = 0
+		''reconstruct array removing pt2
+		For i = 0 To Ubound(arrPts01)
+			ptB = Rhino.PointCoordinates(arrPts01(i))
+			case01 = Rhino.PointCompare(ptB, pt2)
+			If case01 = False Then
+				arrPts02(index) = arrPts01(i)
+				index = index + 1
+				Rhino.DeleteObject(arrPts01(i))
+			End If
+		Next
+		
+		line0 = Rhino.AddLine(pt0, pt1)
+		line0 = Rhino.AddLine(pt1, pt2)
+		line0 = Rhino.AddLine(pt2, pt0)
+		
+		neighborFunction = arrPts02''return array of remaining points
+			
+	End If
+	neighborFunction = False		
+End Function
